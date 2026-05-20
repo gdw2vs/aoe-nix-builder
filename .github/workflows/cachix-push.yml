@@ -18,7 +18,7 @@ name: Push to Cachix
 
 on:
   schedule:
-    - cron: '30 6 * * *' # daily at 6:30am UTC
+    - cron: '30 * * * *' # hourly at :30
   workflow_dispatch:
     inputs:
       upstream_ref:
