@@ -4,9 +4,13 @@ name: Push to Cachix
 # and pushes ALL store paths to Cachix so new hosts don't need to recompile.
 #
 # Triggers:
-#   - Daily schedule: checks for new upstream releases, only builds if there's
-#     a new tag since the last successful build.
+#   - Daily schedule: checks for new upstream releases. Compares the latest
+#     release commit to what's pinned in flake.lock; skips if already built.
 #   - Manual dispatch: always builds (can optionally pin an upstream ref).
+#
+# State is tracked via flake.lock: after a successful build the workflow
+# commits the updated flake.lock, so the next run can detect there's nothing
+# new without any external storage. No PAT or repo variables needed.
 #
 # Requires two repository secrets:
 #   CACHIX_AUTH_TOKEN  - from cachix.org (Settings > Auth Tokens)
@@ -22,7 +26,7 @@ on:
         required: false
         default: ''
       force:
-        description: 'Build even if the tag has not changed'
+        description: 'Build even if flake.lock is already up to date'
         type: boolean
         default: false
 
@@ -36,6 +40,8 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Determine upstream ref
         id: check
         env:
@@ -50,27 +56,30 @@ jobs:
             exit 0
           fi
 
-          # Get latest release tag from upstream.
-          LATEST=$(gh api repos/njbrake/agent-of-empires/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
-          if [[ -z "$LATEST" ]]; then
+          # Get latest release tag and its commit SHA from upstream.
+          RELEASE=$(gh api repos/njbrake/agent-of-empires/releases/latest 2>/dev/null || echo "")
+          if [[ -z "$RELEASE" ]]; then
             echo "No upstream release found."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Latest upstream release: $LATEST"
-          echo "ref=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          LATEST_TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          LATEST_SHA=$(gh api "repos/njbrake/agent-of-empires/commits/$LATEST_TAG" --jq '.sha' 2>/dev/null || echo "")
 
-          # Check if we already built this tag (stored as a repo variable).
-          LAST_BUILT=$(gh api "repos/${{ github.repository }}/actions/variables/LAST_BUILT_TAG" --jq '.value' 2>/dev/null || echo "")
-          echo "Last built tag: ${LAST_BUILT:-<none>}"
+          echo "Latest upstream release: $LATEST_TAG ($LATEST_SHA)"
+          echo "ref=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
 
-          if [[ "$LATEST" == "$LAST_BUILT" && "${{ inputs.force }}" != "true" ]]; then
-            echo "Already built $LATEST, skipping."
+          # Compare to what's currently pinned in flake.lock.
+          LOCKED_SHA=$(jq -r '.nodes["agent-of-empires"].locked.rev // ""' flake.lock)
+          echo "Currently pinned in flake.lock: ${LOCKED_SHA:-<none>}"
+
+          if [[ "$LATEST_SHA" == "$LOCKED_SHA" && "${{ inputs.force }}" != "true" ]]; then
+            echo "flake.lock is already pinned to $LATEST_TAG, skipping build."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New release detected, will build."
+            echo "New release detected ($LATEST_TAG), will build."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -120,22 +129,37 @@ jobs:
           nix-store --query --requisites ./result \
             | cachix push "$CACHE"
 
-  record-tag:
-    name: Record built tag
+      - name: Upload updated flake.lock
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-lock
+          path: flake.lock
+
+  commit-flake-lock:
+    name: Commit updated flake.lock
     needs: [check-release, build]
     if: needs.check-release.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
-      actions: write
+      contents: write
     steps:
-      - name: Save last built tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+
+      - name: Download updated flake.lock
+        uses: actions/download-artifact@v4
+        with:
+          name: flake-lock
+
+      - name: Commit and push flake.lock
         run: |
           TAG="${{ needs.check-release.outputs.tag }}"
-          # Create or update the repository variable.
-          gh api --method PATCH "repos/${{ github.repository }}/actions/variables/LAST_BUILT_TAG" \
-            -f name=LAST_BUILT_TAG -f value="$TAG" 2>/dev/null \
-          || gh api --method POST "repos/${{ github.repository }}/actions/variables" \
-            -f name=LAST_BUILT_TAG -f value="$TAG"
-          echo "Recorded LAST_BUILT_TAG=$TAG"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add flake.lock
+          if git diff --cached --quiet; then
+            echo "flake.lock unchanged, nothing to commit."
+          else
+            git commit -m "chore: pin upstream to $TAG"
+            git push
+          fi
