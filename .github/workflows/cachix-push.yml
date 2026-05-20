@@ -1,0 +1,141 @@
+name: Push to Cachix
+
+# Builds aoe-with-web (--features serve, web UI embedded) for Linux and macOS
+# and pushes ALL store paths to Cachix so new hosts don't need to recompile.
+#
+# Triggers:
+#   - Daily schedule: checks for new upstream releases, only builds if there's
+#     a new tag since the last successful build.
+#   - Manual dispatch: always builds (can optionally pin an upstream ref).
+#
+# Requires two repository secrets:
+#   CACHIX_AUTH_TOKEN  - from cachix.org (Settings > Auth Tokens)
+#   CACHIX_CACHE_NAME  - your cache name (e.g. "gdw2vs")
+
+on:
+  schedule:
+    - cron: '30 6 * * *' # daily at 6:30am UTC
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream ref to build (tag, branch, or commit). Leave blank for latest release.'
+        required: false
+        default: ''
+      force:
+        description: 'Build even if the tag has not changed'
+        type: boolean
+        default: false
+
+jobs:
+  check-release:
+    name: Check for new upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      ref: ${{ steps.check.outputs.ref }}
+      tag: ${{ steps.check.outputs.tag }}
+
+    steps:
+      - name: Determine upstream ref
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Manual dispatch with explicit ref: always build that ref.
+          if [[ -n "${{ inputs.upstream_ref }}" ]]; then
+            echo "ref=${{ inputs.upstream_ref }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ inputs.upstream_ref }}" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Building manually requested ref: ${{ inputs.upstream_ref }}"
+            exit 0
+          fi
+
+          # Get latest release tag from upstream.
+          LATEST=$(gh api repos/njbrake/agent-of-empires/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+          if [[ -z "$LATEST" ]]; then
+            echo "No upstream release found."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Latest upstream release: $LATEST"
+          echo "ref=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+
+          # Check if we already built this tag (stored as a repo variable).
+          LAST_BUILT=$(gh api "repos/${{ github.repository }}/actions/variables/LAST_BUILT_TAG" --jq '.value' 2>/dev/null || echo "")
+          echo "Last built tag: ${LAST_BUILT:-<none>}"
+
+          if [[ "$LATEST" == "$LAST_BUILT" && "${{ inputs.force }}" != "true" ]]; then
+            echo "Already built $LATEST, skipping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New release detected, will build."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build and push (${{ matrix.os }})
+    needs: check-release
+    if: needs.check-release.outputs.should_build == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+
+      - name: Pin upstream to release ref
+        run: |
+          REF="${{ needs.check-release.outputs.ref }}"
+          echo "Pinning agent-of-empires input to ref: $REF"
+          nix flake update agent-of-empires --override-input agent-of-empires "github:njbrake/agent-of-empires/$REF"
+
+      # Must run BEFORE the build so the post-build hook captures every
+      # derivation as it is built.
+      - name: Set up Cachix
+        uses: cachix/cachix-action@1eb2ef646ac0255473d23a5907ad7b04ce94065c # v17
+        with:
+          name: ${{ secrets.CACHIX_CACHE_NAME }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build aoe-with-web
+        run: nix build .#aoe-with-web
+
+      - name: Push all build inputs and outputs to Cachix
+        run: |
+          CACHE="${{ secrets.CACHIX_CACHE_NAME }}"
+          SYSTEM=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+          DRV=$(nix path-info --derivation ".#packages.${SYSTEM}.aoe-with-web")
+
+          # All inputs (build-time: crates, toolchain, npm, etc.)
+          nix-store --query --requisites "$DRV" \
+            | cachix push "$CACHE"
+
+          # All outputs (runtime closure: the binary + its runtime deps)
+          nix-store --query --requisites ./result \
+            | cachix push "$CACHE"
+
+  record-tag:
+    name: Record built tag
+    needs: [check-release, build]
+    if: needs.check-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Save last built tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          # Create or update the repository variable.
+          gh api --method PATCH "repos/${{ github.repository }}/actions/variables/LAST_BUILT_TAG" \
+            -f name=LAST_BUILT_TAG -f value="$TAG" 2>/dev/null \
+          || gh api --method POST "repos/${{ github.repository }}/actions/variables" \
+            -f name=LAST_BUILT_TAG -f value="$TAG"
+          echo "Recorded LAST_BUILT_TAG=$TAG"
