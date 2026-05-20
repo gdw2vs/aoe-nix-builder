@@ -4,13 +4,13 @@ name: Push to Cachix
 # and pushes ALL store paths to Cachix so new hosts don't need to recompile.
 #
 # Triggers:
-#   - Daily schedule: checks for new upstream releases. Compares the latest
+#   - Hourly schedule: checks for new upstream releases. Compares the latest
 #     release commit to what's pinned in flake.lock; skips if already built.
 #   - Manual dispatch: always builds (can optionally pin an upstream ref).
 #
-# State is tracked via flake.lock: after a successful build the workflow
-# commits the updated flake.lock, so the next run can detect there's nothing
-# new without any external storage. No PAT or repo variables needed.
+# State is tracked via flake.lock: after a successful build the ubuntu job
+# commits the updated flake.lock so the next run can detect nothing is new.
+# No PAT or repo variables needed.
 #
 # Requires two repository secrets:
 #   CACHIX_AUTH_TOKEN  - from cachix.org (Settings > Auth Tokens)
@@ -88,6 +88,8 @@ jobs:
     needs: check-release
     if: needs.check-release.outputs.should_build == 'true'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -129,29 +131,9 @@ jobs:
           nix-store --query --requisites ./result \
             | cachix push "$CACHE"
 
-      - name: Upload updated flake.lock
+      # Only commit from ubuntu to avoid a race between the two matrix jobs.
+      - name: Commit updated flake.lock
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-lock
-          path: flake.lock
-
-  commit-flake-lock:
-    name: Commit updated flake.lock
-    needs: [check-release, build]
-    if: needs.check-release.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download updated flake.lock
-        uses: actions/download-artifact@v4
-        with:
-          name: flake-lock
-
-      - name: Commit and push flake.lock
         run: |
           TAG="${{ needs.check-release.outputs.tag }}"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -161,5 +143,6 @@ jobs:
             echo "flake.lock unchanged, nothing to commit."
           else
             git commit -m "chore: pin upstream to $TAG"
+            git pull --rebase origin main
             git push
           fi
