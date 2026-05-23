@@ -104,7 +104,7 @@ jobs:
         run: |
           REF="${{ needs.check-release.outputs.ref }}"
           echo "Pinning agent-of-empires input to ref: $REF"
-          nix flake update agent-of-empires --override-input agent-of-empires "github:njbrake/agent-of-empires/$REF"
+          nix flake update --override-input agent-of-empires "github:njbrake/agent-of-empires/$REF" agent-of-empires
 
       # Must run BEFORE the build so the post-build hook captures every
       # derivation as it is built.
@@ -120,16 +120,13 @@ jobs:
       - name: Push all build inputs and outputs to Cachix
         run: |
           CACHE="${{ secrets.CACHIX_CACHE_NAME }}"
-          SYSTEM=$(nix eval --raw --impure --expr 'builtins.currentSystem')
-          DRV=$(nix path-info --derivation ".#packages.${SYSTEM}.aoe-with-web")
+          DRV=$(nix path-info --derivation .#aoe-with-web)
 
           # All inputs (build-time: crates, toolchain, npm, etc.)
-          nix-store --query --requisites "$DRV" \
-            | cachix push "$CACHE"
+          nix path-info -r "$DRV" | cachix push "$CACHE"
 
           # All outputs (runtime closure: the binary + its runtime deps)
-          nix-store --query --requisites ./result \
-            | cachix push "$CACHE"
+          nix path-info -r ./result | cachix push "$CACHE"
 
       # Only commit from ubuntu to avoid a race between the two matrix jobs.
       - name: Commit updated flake.lock
@@ -143,6 +140,9 @@ jobs:
             echo "flake.lock unchanged, nothing to commit."
           else
             git commit -m "chore: pin upstream to $TAG"
-            git pull --rebase origin main
-            git push
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push && break
+              echo "Push failed, retrying ($i/3)..."
+              sleep 5
+            done
           fi
