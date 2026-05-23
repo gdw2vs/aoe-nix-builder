@@ -3,7 +3,8 @@
 
   inputs = {
     agent-of-empires.url = "github:njbrake/agent-of-empires";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Use tarball URL to avoid git fetch issues (especially on macOS runners)
+    nixpkgs.url = "https://github.com/NixOS/nixpkgs/tarball/0182a361324364ae3f436a63005877674cf45efb";
   };
 
   outputs = { self, agent-of-empires, nixpkgs, ... }:
