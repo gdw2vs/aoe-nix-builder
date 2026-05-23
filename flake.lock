@@ -7,11 +7,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1779184083,
-        "narHash": "sha256-9QebjPS2lyrkRd91Dlnj224Pb1rECht94mxB8ERpObc=",
+        "lastModified": 1779481549,
+        "narHash": "sha256-aTHvKSixgpp7fojdbg0sp2fV0AYFri42eNn6jIPyhEA=",
         "owner": "njbrake",
         "repo": "agent-of-empires",
-        "rev": "4bfe10c1c63ec2ce8d37637f41a11b7eb1f240ac",
+        "rev": "2df6d9d68bb16e94d54ec6498625d8d493c25e33",
         "type": "github"
       },
       "original": {
@@ -84,9 +84,26 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1779357205,
+        "narHash": "sha256-cCO8aTqss5x9Ky8GWkpY0Hy5fyTZEbtifSUV8QjSzic=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f83fc3c307e74bc5fd5adb7eb6b8b13ffd2a36e1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "agent-of-empires": "agent-of-empires"
+        "agent-of-empires": "agent-of-empires",
+        "nixpkgs": "nixpkgs_2"
       }
     }
   },
