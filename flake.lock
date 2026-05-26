@@ -7,11 +7,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1779814547,
-        "narHash": "sha256-smpuROl8GMXbHYlqBY0sKih2BWjAO2hgdDTW9CYJnbU=",
+        "lastModified": 1779822584,
+        "narHash": "sha256-YG4D4VN/9VIQarAGrSZA3b24/AhXvsaPUv+88si4Eic=",
         "owner": "njbrake",
         "repo": "agent-of-empires",
-        "rev": "fc066159bcfa4764dfb9ce8e2dbd48a24a79ed97",
+        "rev": "54b39006ad9bcc2d41b2ce4cc0485ec3a1d3c867",
         "type": "github"
       },
       "original": {
